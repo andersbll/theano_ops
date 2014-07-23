@@ -7,13 +7,11 @@ import theano
 import theano.tensor as T
 
 from theano.sandbox.cuda.basic_ops import gpu_from_host, host_from_gpu
-from theano.tensor.nnet import conv
 from pylearn2.sandbox.cuda_convnet.filter_acts import FilterActs
 from pylearn2.sandbox.cuda_convnet.weight_acts import WeightActs
 from pylearn2.sandbox.cuda_convnet.img_acts import ImageActs
 from theano_ops.conv_bc01_fft import (ConvBC01, ConvBC01ImgsGrad,
                                       ConvBC01FiltersGrad)
-import theano_ops.conv_bc01_fft
 
 
 def avg_running_time(fun):
@@ -32,9 +30,10 @@ def allclose(a, b):
 
 
 def benchmark(n_imgs, n_channels, img_shape, n_filters, filter_shape, pad):
-    print('Benchmarking n_imgs: %i, n_channels: %i, ' % (n_imgs, n_channels)
-          + 'img_shape: (%i, %i), ' % img_shape
-          + 'filter_shape: (%i, %i), pad: %i' % (filter_shape + (pad,)))
+    print('\nn_imgs: %i, n_channels: %i, img_shape: (%i, %i), '
+          % ((n_imgs, n_channels) + img_shape)
+          + 'n_filters: %i, filter_shape: (%i, %i), pad: %i'
+          % ((n_filters,) + filter_shape + (pad,)))
 
     # Setup arrays
     img_h, img_w = img_shape
@@ -71,13 +70,12 @@ def benchmark(n_imgs, n_channels, img_shape, n_filters, filter_shape, pad):
     convout_fft_expr = convout_fft_op(imgs_bc01_t, filters_fc01_t)
     convout_fft_fun = theano.function([], host_from_gpu(convout_fft_expr))
     convout_fft = convout_fft_fun()
-
-    print('fprop')
-    print('allclose: ' + str(allclose(convout_fft, convout_cc)))
+    print('fprop correct: ' + str(allclose(convout_fft, convout_cc)))
     duration_cc = avg_running_time(convout_cc_fun)
     convout_fft_fun = theano.function([], convout_fft_expr)
     duration_fft = avg_running_time(convout_fft_fun)
-    print('cuda_convnet: %f  fft: %f' % (duration_cc, duration_fft))
+    print('fprop time: cuda_convnet: %f  fft: %f  speedup: %.2f'
+          % (duration_cc, duration_fft, duration_cc/duration_fft))
 
     # Back propagation, imgs
     dimgs_cc_op = ImageActs(stride=1, partial_sum=1, pad=pad)
@@ -91,12 +89,12 @@ def benchmark(n_imgs, n_channels, img_shape, n_filters, filter_shape, pad):
     dimgs_fft_expr = dimgs_fft_op(filters_fc01_t, convout_bc01_t)
     dimgs_fft_fun = theano.function([], host_from_gpu(dimgs_fft_expr))
     dimgs_fft = dimgs_fft_fun()
-    print('bprop imgs')
-    print('allclose: ' + str(allclose(dimgs_fft, dimgs_cc)))
+    print('bprop_imgs correct: ' + str(allclose(dimgs_fft, dimgs_cc)))
     duration_cc = avg_running_time(dimgs_cc_fun)
     dimgs_fft_fun = theano.function([], dimgs_fft_expr)
     duration_fft = avg_running_time(dimgs_fft_fun)
-    print('cuda_convnet: %f  fft: %f' % (duration_cc, duration_fft))
+    print('bprop_imgs time: cuda_convnet: %f  fft: %f  speedup: %.2f'
+          % (duration_cc, duration_fft, duration_cc/duration_fft))
 
     # Back propagation, filters
     dfilters_cc_op = WeightActs(stride=1, partial_sum=1, pad=pad)
@@ -111,25 +109,43 @@ def benchmark(n_imgs, n_channels, img_shape, n_filters, filter_shape, pad):
     dfilters_fft_expr = dfilters_fft_op(imgs_bc01_t, convout_bc01_t)
     dfilters_fft_fun = theano.function([], host_from_gpu(dfilters_fft_expr))
     dfilters_fft = dfilters_fft_fun()
-    print('bprop filters')
-    print('allclose: ' + str(allclose(dfilters_fft, dfilters_cc)))
+    print('bprop_filters correct: ' + str(allclose(dfilters_fft, dfilters_cc)))
     duration_cc = avg_running_time(dfilters_cc_fun)
     dfilters_fft_fun = theano.function([], dfilters_fft_expr)
     duration_fft = avg_running_time(dfilters_fft_fun)
-    print('cuda_convnet: %f  fft: %f' % (duration_cc, duration_fft))
+    print('bprop_filters time: cuda_convnet: %f  fft: %f  speedup: %.2f'
+          % (duration_cc, duration_fft, duration_cc/duration_fft))
 
 
 def run():
+    np.set_printoptions(precision=2, suppress=True)
     np.random.seed(1)
-    # NB: In the current implementation of conv_bc01_fft, memory does not get
-    #     free'd correctly. Therefore, we can only run one configuration for
-    #     each program run.
+    # Configurations are given in the form
+    # (n_imgs, n_channels, img_shape, n_filters, filter_shape, padding)
     configurations = [
+        # From the original paper
+        # http://arxiv.org/abs/1312.5851
         (128, 3, (32, 32), 96, (11, 11), 0),
-#        (128, 96, (32, 32), 256, (7, 7), 0),
-#        (128, 256, (16, 16), 384, (5, 5), 0),
-#        (128, 384, (16, 16), 384, (5, 5), 0),
-#        (128, 384, (16, 16), 384, (3, 3), 0),
+        (128, 96, (32, 32), 256, (7, 7), 0),
+        (128, 256, (16, 16), 384, (5, 5), 0),
+        (128, 384, (16, 16), 384, (5, 5), 0),
+        (128, 384, (16, 16), 384, (3, 3), 0),
+        # From Sander Dieleman
+        # http://benanne.github.io/2014/05/12/fft-convolutions-in-theano.html
+#        (64, 3, (96, 96), 128, (16, 16), 0), # out of memory error
+#        (64, 128, (32, 32), 64, (8, 8), 0),
+#        (128, 32, (54, 54), 64, (6, 6), 0),
+#        (128, 128, (16, 16), 128, (8, 8), 0),
+#        (128, 1024, (32, 32), 128, (4, 4), 0), # out of memory error
+        # Exotic shapes and padding
+#        (5, 3, (5, 5), 16, (3, 3), 1),
+#        (64, 32, (32, 32), 32, (5, 5), 2),
+#        (64, 1, (17, 19), 32, (7, 7), 4),
+#        (64, 3, (9, 16), 32, (7, 7), 4),
+        # Typical CNN layers for CIFAR-10
+#        (128, 3, (32, 32), 64, (5, 5), 2),
+#        (128, 64, (16, 16), 64, (5, 5), 2),
+#        (128, 64, (8, 8), 64, (5, 5), 2),
     ]
 
     for conf in configurations:
