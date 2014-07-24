@@ -9,7 +9,7 @@ from theano.sandbox.cuda.basic_ops import gpu_contiguous
 
 from .abll_base import ABLLOp
 
-_cache_version = (0, 1)
+_cache_version = ()
 
 
 def conv_bc01(imgs, filters, n_imgs, n_channels, n_filters, img_shape,
@@ -44,16 +44,21 @@ def half_fft(size):
 
 
 def convout_shape(img_shape, filter_shape, pad_shape):
+    ''' Calculate the necessary image shape for supporting Fourier convolutions
+    without cyclic overlap. '''
     return tuple(np.array(img_shape) + 2*np.array(pad_shape)
                  - np.array(filter_shape) + 1)
 
 
 def fft_shape(img_shape, pad_shape):
+    ''' Calculate the necessary image shape for supporting Fourier convolutions
+    without cyclic overlap. '''
     return (round_up_fft_size(img_shape[0] + 2*pad_shape[0]),
             round_up_fft_size(img_shape[1] + 2*pad_shape[1]))
 
 
 def fft_to_01bc(imgs, n_imgs, n_channels, img_shape):
+    ''' Batch FFT of bc01 images to 01bc form. '''
     op = FFT_TO_01BC(n_imgs, n_channels, img_shape)
     if 'Cuda' not in str(type(imgs)):
         imgs = gpu_contiguous(imgs)
@@ -61,6 +66,7 @@ def fft_to_01bc(imgs, n_imgs, n_channels, img_shape):
 
 
 def ifft_to_bc01(ffts, n_imgs, n_channels, img_shape):
+    ''' Batch FFT of 01bc images to bc01 form. '''
     op = IFFT_TO_BC01(n_imgs, n_channels, img_shape)
     if 'Cuda' not in str(type(ffts)):
         ffts = gpu_contiguous(ffts)
@@ -68,6 +74,8 @@ def ifft_to_bc01(ffts, n_imgs, n_channels, img_shape):
 
 
 def cgemm_batched(a, b, trans_a, trans_b, m, n, k, alpha, batch_size):
+    ''' Batch matrix multiplications. The matrices are expected to be stored
+    contiguously in memory. '''
     if 'Cuda' not in str(type(a)):
         ffts = gpu_contiguous(a)
     if 'Cuda' not in str(type(b)):
@@ -216,8 +224,8 @@ class CGEMMBatched(ABLLOp):
 
     def c_headers(self):
         return [
-            '<cublas_v2.h>',
             'abll/cuda.hpp',
+            'cuda_ndarray.cuh',
         ]
 
     def __eq__(self, other):
@@ -245,7 +253,7 @@ class CGEMMBatched(ABLLOp):
 
     def c_support_code_apply(self, node, name):
         batch_size = self.batch_size
-        code = """
+        code = '''
 void create_ptr_list(float2 ***ptrs_dev, float2 *base, int stride) {
   float2 *ptrs_host[%(batch_size)d];
   for(int i = 0; i < %(batch_size)d; i++){
@@ -260,17 +268,17 @@ float2 **b_ptrs = NULL;
 float2 *b_ptrs_base = NULL;
 float2 **c_ptrs = NULL;
 float2 *c_ptrs_base = NULL;
-        """ % locals()
+        ''' % locals()
         return code
 
     def c_init_code_apply(self, node, name):
         # TODO: deallocated ptrs
         batch_size = self.batch_size
-        code = """
+        code = '''
 CUDA_CHECK(cudaMalloc(&a_ptrs, %(batch_size)d * sizeof(float2 **)));
 CUDA_CHECK(cudaMalloc(&b_ptrs, %(batch_size)d * sizeof(float2 **)));
 CUDA_CHECK(cudaMalloc(&c_ptrs, %(batch_size)d * sizeof(float2 **)));
-        """ % locals()
+        ''' % locals()
         return code
 
     def c_code(self, node, name, inputs, outputs, sub):
@@ -296,7 +304,7 @@ CUDA_CHECK(cudaMalloc(&c_ptrs, %(batch_size)d * sizeof(float2 **)));
             ldb = k
         alpha = float(self.alpha)
         batch_size = self.batch_size
-        code = """
+        code = '''
 {
 const int c_dims [] = {
     %(n)d * %(m)d * %(batch_size)d * 2,
@@ -325,12 +333,12 @@ if (c_ptrs_base != c) {
 float2 alpha = {%(alpha).20f, 0.0};
 float2 beta = {0.0, 0.0};
 CUBLAS_CHECK(cublasCgemmBatched(
-    CUDA::cublas_handle(), %(trans_a)s, %(trans_b)s, %(m)d, %(n)d, %(k)d,
+    handle, %(trans_a)s, %(trans_b)s, %(m)d, %(n)d, %(k)d,
     &alpha, (const float2**) a_ptrs, %(lda)d, (const float2**) b_ptrs, %(ldb)d,
     &beta, c_ptrs, %(ldc)d, %(batch_size)d
 ));
 }
-        """ % locals()
+        ''' % locals()
         return code
 
     def c_code_cache_version(self):
@@ -381,7 +389,7 @@ class FFT_TO_01BC(FFTBase):
         img_w_half = half_fft(img_w)
         # Double size because we are working with float2
         fft_size = batch_size * img_h * half_fft(img_w) * 2
-        code = """
+        code = '''
 {
 const int ffts_dims [] = {
     %(fft_size)d
@@ -408,7 +416,7 @@ CUFFT_CHECK(cufftPlanMany(&plan, rank, input_dims, inembed, istride, idist,
 CUFFT_CHECK(cufftExecR2C(plan, imgs, ffts));
 CUFFT_CHECK(cufftDestroy(plan));
 }
-        """ % locals()
+        ''' % locals()
         return code
 
 
@@ -427,7 +435,7 @@ class IFFT_TO_BC01(FFTBase):
         batch_size = self.n_imgs * self.n_channels
         img_h, img_w = self.img_shape
         img_w_half = half_fft(img_w)
-        code = """
+        code = '''
 {
 const int imgs_dims [] = {
     %(n_imgs)d,
@@ -456,7 +464,7 @@ CUFFT_CHECK(cufftPlanMany(&plan, rank, input_dims, inembed, istride, idist,
 CUFFT_CHECK(cufftExecC2R(plan, ffts, imgs));
 CUFFT_CHECK(cufftDestroy(plan));
 }
-        """ % locals()
+        ''' % locals()
         return code
 
 

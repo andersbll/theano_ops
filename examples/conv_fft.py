@@ -59,6 +59,7 @@ def benchmark(n_imgs, n_channels, img_shape, n_filters, filter_shape, pad):
     convout_c01b_t = theano.shared(convout_c01b.astype(theano.config.floatX))
 
     # Forward propagation
+    print('fprop')
     convout_cc_op = FilterActs(stride=1, partial_sum=4, pad=pad)
     convout_cc_expr = convout_cc_op(imgs_c01b_t, filters_c01f_t)
     convout_cc_fun = theano.function([], convout_cc_expr)
@@ -70,14 +71,22 @@ def benchmark(n_imgs, n_channels, img_shape, n_filters, filter_shape, pad):
     convout_fft_expr = convout_fft_op(imgs_bc01_t, filters_fc01_t)
     convout_fft_fun = theano.function([], host_from_gpu(convout_fft_expr))
     convout_fft = convout_fft_fun()
-    print('fprop correct: ' + str(allclose(convout_fft, convout_cc)))
+    print('         correct: ' + str(allclose(convout_fft, convout_cc)))
     duration_cc = avg_running_time(convout_cc_fun)
     convout_fft_fun = theano.function([], convout_fft_expr)
     duration_fft = avg_running_time(convout_fft_fun)
-    print('fprop time: cuda_convnet: %f  fft: %f  speedup: %.2f'
-          % (duration_cc, duration_fft, duration_cc/duration_fft))
+    print('   avg. duration: cuda_convnet: %.4f  fft: %.4f'
+          % (duration_cc, duration_fft))
+    print('         speedup: %.2f' % (duration_cc/duration_fft))
+    del convout_fft_op
+    del convout_fft_expr
+    del convout_fft_fun
+    del convout_cc_op
+    del convout_cc_expr
+    del convout_cc_fun
 
     # Back propagation, imgs
+    print('bprop_imgs')
     dimgs_cc_op = ImageActs(stride=1, partial_sum=1, pad=pad)
     dimgs_cc_expr = dimgs_cc_op(convout_c01b_t, filters_c01f_t)
     dimgs_cc_fun = theano.function([], dimgs_cc_expr)
@@ -89,12 +98,19 @@ def benchmark(n_imgs, n_channels, img_shape, n_filters, filter_shape, pad):
     dimgs_fft_expr = dimgs_fft_op(filters_fc01_t, convout_bc01_t)
     dimgs_fft_fun = theano.function([], host_from_gpu(dimgs_fft_expr))
     dimgs_fft = dimgs_fft_fun()
-    print('bprop_imgs correct: ' + str(allclose(dimgs_fft, dimgs_cc)))
+    print('         correct: ' + str(allclose(dimgs_fft, dimgs_cc)))
     duration_cc = avg_running_time(dimgs_cc_fun)
     dimgs_fft_fun = theano.function([], dimgs_fft_expr)
     duration_fft = avg_running_time(dimgs_fft_fun)
-    print('bprop_imgs time: cuda_convnet: %f  fft: %f  speedup: %.2f'
-          % (duration_cc, duration_fft, duration_cc/duration_fft))
+    print('   avg. duration: cuda_convnet: %.4f  fft: %.4f'
+          % (duration_cc, duration_fft))
+    print('         speedup: %.2f' % (duration_cc/duration_fft))
+    del dimgs_fft_op
+    del dimgs_fft_expr
+    del dimgs_fft_fun
+    del dimgs_cc_op
+    del dimgs_cc_expr
+    del dimgs_cc_fun
 
     # Back propagation, filters
     dfilters_cc_op = WeightActs(stride=1, partial_sum=1, pad=pad)
@@ -109,16 +125,17 @@ def benchmark(n_imgs, n_channels, img_shape, n_filters, filter_shape, pad):
     dfilters_fft_expr = dfilters_fft_op(imgs_bc01_t, convout_bc01_t)
     dfilters_fft_fun = theano.function([], host_from_gpu(dfilters_fft_expr))
     dfilters_fft = dfilters_fft_fun()
-    print('bprop_filters correct: ' + str(allclose(dfilters_fft, dfilters_cc)))
+    print('bprop_filters')
+    print('         correct: ' + str(allclose(dfilters_fft, dfilters_cc)))
     duration_cc = avg_running_time(dfilters_cc_fun)
     dfilters_fft_fun = theano.function([], dfilters_fft_expr)
     duration_fft = avg_running_time(dfilters_fft_fun)
-    print('bprop_filters time: cuda_convnet: %f  fft: %f  speedup: %.2f'
-          % (duration_cc, duration_fft, duration_cc/duration_fft))
+    print('   avg. duration: cuda_convnet: %.4f  fft: %.4f'
+          % (duration_cc, duration_fft))
+    print('         speedup: %.2f' % (duration_cc/duration_fft))
 
 
 def run():
-    np.set_printoptions(precision=2, suppress=True)
     np.random.seed(1)
     # Configurations are given in the form
     # (n_imgs, n_channels, img_shape, n_filters, filter_shape, padding)
@@ -132,7 +149,7 @@ def run():
         (128, 384, (16, 16), 384, (3, 3), 0),
         # From Sander Dieleman
         # http://benanne.github.io/2014/05/12/fft-convolutions-in-theano.html
-#        (64, 3, (96, 96), 128, (16, 16), 0), # out of memory error
+#        (64, 3, (96, 96), 128, (16, 16), 0),
 #        (64, 128, (32, 32), 64, (8, 8), 0),
 #        (128, 32, (54, 54), 64, (6, 6), 0),
 #        (128, 128, (16, 16), 128, (8, 8), 0),
