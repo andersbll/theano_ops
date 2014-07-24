@@ -9,7 +9,7 @@ from theano.sandbox.cuda.basic_ops import gpu_contiguous
 
 from .abll_base import ABLLOp
 
-_cache_version = ()
+_cache_version = (0, 2)
 
 
 def conv_bc01(imgs, filters, n_imgs, n_channels, n_filters, img_shape,
